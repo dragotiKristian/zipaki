@@ -1,0 +1,34 @@
+# Copy the root files
+FROM node:18-alpine as deps
+WORKDIR /app
+COPY yarn.lock ./yarn.lock
+COPY .yarnrc.yml ./.yarnrc.yml
+COPY .yarn ./.yarn/
+COPY package.json .
+COPY tsconfig.json .
+
+
+# Build MongoDB
+FROM deps as mongo-builder
+WORKDIR /app
+COPY packages/mongo/ ./packages/mongo/
+RUN yarn workspaces focus @zipaki/mongo
+
+
+# Build backend
+FROM deps as onix-parser-builder
+WORKDIR /app
+COPY --from=mongo-builder /app/packages/mongo/package.json ./packages/mongo/package.json
+COPY packages/onix-parser/package.json ./packages/onix-parser/package.json
+COPY packages/libs/package.json ./packages/libs/package.json
+RUN yarn workspaces focus @zipaki/onix-parser @zipaki/libs --production
+
+
+FROM node:18-alpine
+WORKDIR /app
+COPY packages/onix-parser ./packages/onix-parser
+COPY packages/libs ./packages/libs
+COPY packages/mongo ./packages/mongo
+COPY --from=onix-parser-builder /app/node_modules ./node_modules
+COPY --from=mongo-builder /app/packages/mongo/package.json ./packages/mongo/package.json
+CMD cd packages/onix-parser && yarn start

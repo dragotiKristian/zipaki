@@ -1,0 +1,4 @@
+{
+    "RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-1:000000000000:panic_mode_dead_letter\",\"maxReceiveCount\":\"1000\"}",
+    "MessageRetentionPeriod": "259200"
+}

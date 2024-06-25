@@ -1,0 +1,92 @@
+# Copy the root files
+FROM node:18-alpine as deps
+WORKDIR /app
+COPY yarn.lock ./yarn.lock
+COPY .yarnrc.yml ./.yarnrc.yml
+COPY .yarn ./.yarn/
+COPY package.json .
+COPY tsconfig.json .
+
+FROM deps as build-deps
+COPY packages/mongo/package.json ./packages/mongo/package.json 
+COPY packages/be-gql/package.json ./packages/be-gql/package.json
+COPY packages/libs/package.json ./packages/libs/package.json
+COPY packages/gql/package.json ./packages/gql/package.json
+COPY packages/gql-generated/package.json ./packages/gql-generated/package.json
+RUN yarn workspaces focus @zipaki/be-gql
+
+FROM build-deps as generate-step
+COPY packages/gql ./packages/gql
+COPY packages/gql-generated ./packages/gql-generated
+RUN yarn workspace @zipaki/gql build
+RUN yarn workspace @zipaki/gql-generated generate
+RUN yarn workspace @zipaki/gql-generated generate:enums
+RUN yarn workspace @zipaki/gql-generated build
+
+
+# Build TS
+FROM generate-step as copied-files
+COPY packages/mongo/ ./packages/mongo/
+COPY packages/be-gql ./packages/be-gql
+COPY packages/libs ./packages/libs
+COPY packages/gql ./packages/gql
+COPY packages/gql-generated ./packages/gql-generated
+
+FROM copied-files as ts-builder
+RUN yarn workspace @zipaki/be-gql build
+
+FROM copied-files as ts-debug-builder
+RUN yarn workspace @zipaki/be-gql build -p tsconfig.debug.json
+
+
+# Build Runtime Deps
+FROM deps as be-builder
+WORKDIR /app
+COPY ./packages/mongo/package.json ./packages/mongo/package.json
+COPY ./packages/be-gql/package.json ./packages/be-gql/package.json
+COPY ./packages/libs/package.json ./packages/libs/package.json
+COPY ./packages/gql/package.json ./packages/gql/package.json
+COPY ./packages/gql-generated/package.json ./packages/gql-generated/package.json
+RUN yarn workspaces focus --production @zipaki/be-gql
+
+
+FROM node:18-alpine as final-image
+WORKDIR /app
+
+# Runtime Node Modules
+COPY --from=be-builder /app/node_modules ./node_modules
+# Not TS
+# Libs
+COPY packages/libs ./packages/libs
+# Mongo
+COPY packages/mongo ./packages/mongo
+
+# TS Modules
+# Mongo
+COPY ./packages/gql/package.json ./packages/gql/package.json
+COPY ./packages/gql-generated/package.json ./packages/gql-generated/package.json
+
+# BE
+COPY ./packages/be-gql/package.json ./packages/be-gql/package.json
+COPY ./packages/be-gql/env.local.yml ./packages/be-gql/env.local.yml
+
+
+FROM final-image AS debug-image
+# Mongo
+COPY --from=ts-debug-builder /app/packages/gql/build/ ./packages/gql/build/
+COPY --from=ts-debug-builder /app/packages/gql-generated/build/ ./packages/gql-generated/build/
+# BE
+COPY --from=ts-debug-builder /app/packages/be-gql/build/ ./packages/be-gql/build/
+EXPOSE 3000
+EXPOSE 9229
+CMD cd packages/be-gql && yarn start:nobuild:debug
+
+
+FROM final-image
+# Mongo
+COPY --from=ts-builder /app/packages/gql/build/ ./packages/gql/build/
+COPY --from=ts-builder /app/packages/gql-generated/build/ ./packages/gql-generated/build/
+# BE
+COPY --from=ts-builder /app/packages/be-gql/build/ ./packages/be-gql/build/
+EXPOSE 3000
+CMD cd packages/be-gql && yarn start:nobuild
